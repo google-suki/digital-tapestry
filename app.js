@@ -16,13 +16,23 @@ let tileSize = 16; // Size of each mosaic block in pixels
 let blendFactor = 0; // 0.0 to 1.0 (overlay factor for original video)
 let flickerCooldownMs = 0; // Default: 0ms (no temporal cooldown stability)
 
+// Force Linear Transition State
+let forceLinearHorizontal = false;
+let forceLinearVertical = false;
+let forceLinearDiagonal = false;
+
+// Traverse Lag (motion-blur catch-up delay) State
+let traverseLagMs = 0;
+
 // Temporal matching cache to reduce high-frequency noise/flicker
 const lastMatches = new Array(200 * 150).fill(null);
 const lastMatchTimes = new Float64Array(200 * 150);
+const lastTransitionTimes = new Float64Array(200 * 150);
 
 function resetMatchHistory() {
     lastMatches.fill(null);
     lastMatchTimes.fill(0);
+    lastTransitionTimes.fill(0);
 }
 
 
@@ -157,6 +167,11 @@ const elements = {
     blendFactorValue: document.getElementById('blend-factor-value'),
     flickerCooldownInput: document.getElementById('input-flicker-cooldown'),
     flickerCooldownValue: document.getElementById('flicker-cooldown-value'),
+    forceLinearHorizontalCheckbox: document.getElementById('force-linear-horizontal'),
+    forceLinearVerticalCheckbox: document.getElementById('force-linear-vertical'),
+    forceLinearDiagonalCheckbox: document.getElementById('force-linear-diagonal'),
+    traverseLagInput: document.getElementById('input-traverse-lag'),
+    traverseLagValue: document.getElementById('traverse-lag-value'),
 
     imageDropZone: document.getElementById('image-drop-zone'),
     gridImageInput: document.getElementById('input-grid-image'),
@@ -917,6 +932,54 @@ function findBestCustomSlice(r, g, b) {
 }
 
 /**
+ * Solves the next transition step in reference grid coordinates constrained by force linear checkboxes
+ */
+function findNextStep(prevRow, prevCol, idealRow, idealCol, hChecked, vChecked, dChecked, maxRows, maxCols) {
+    if (!hChecked && !vChecked && !dChecked) {
+        return { row: idealRow, col: idealCol };
+    }
+    
+    let bestRow = prevRow;
+    let bestCol = prevCol;
+    let minDistance = Infinity;
+    
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            let isAllowed = false;
+            
+            if (dr === 0 && dc === 0) {
+                isAllowed = true;
+            } else if (dr === 0 && Math.abs(dc) === 1) {
+                if (hChecked || dChecked) isAllowed = true;
+            } else if (Math.abs(dr) === 1 && dc === 0) {
+                if (vChecked || dChecked) isAllowed = true;
+            } else if (Math.abs(dr) === 1 && Math.abs(dc) === 1) {
+                if (dChecked) isAllowed = true;
+            }
+            
+            if (isAllowed) {
+                const nextRow = prevRow + dr;
+                const nextCol = prevCol + dc;
+                
+                if (nextRow >= 0 && nextRow < maxRows && nextCol >= 0 && nextCol < maxCols) {
+                    const distRow = idealRow - nextRow;
+                    const distCol = idealCol - nextCol;
+                    const distance = distRow * distRow + distCol * distCol;
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        bestRow = nextRow;
+                        bestCol = nextCol;
+                    }
+                }
+            }
+        }
+    }
+    
+    return { row: bestRow, col: bestCol };
+}
+
+/**
  * Real-time Fixed Sprite Grid Matching
  * 1. Pre-filters 96 tiles using average color distance (LAB or RGB) to select top 10 candidates.
  * 2. Calculates exact pixel structural distance directly from raw downsampled buffer.
@@ -1164,7 +1227,35 @@ function processVideoFrame() {
                     const g = rawBuffer[idx + 1];
                     const b = rawBuffer[idx + 2];
                     
-                    match = findBestTile(r, g, b);
+                    const idealMatch = findBestTile(r, g, b);
+                    
+                    if (lastMatches[cellIdx]) {
+                        if (traverseLagMs > 0 && (now - lastTransitionTimes[cellIdx] < traverseLagMs)) {
+                            match = lastMatches[cellIdx];
+                        } else {
+                            if (forceLinearHorizontal || forceLinearVertical || forceLinearDiagonal) {
+                                const prevMatch = lastMatches[cellIdx];
+                                const nextCoords = findNextStep(
+                                    prevMatch.row, prevMatch.col,
+                                    idealMatch.row, idealMatch.col,
+                                    forceLinearHorizontal, forceLinearVertical, forceLinearDiagonal,
+                                    6, COLOR_PAIRS.length
+                                );
+                                const nextIndex = nextCoords.row * COLOR_PAIRS.length + nextCoords.col;
+                                match = precomputedTiles[nextIndex];
+                            } else {
+                                match = idealMatch;
+                            }
+                            
+                            if (match.index !== lastMatches[cellIdx].index) {
+                                lastTransitionTimes[cellIdx] = now;
+                            }
+                        }
+                    } else {
+                        match = idealMatch;
+                        lastTransitionTimes[cellIdx] = now;
+                    }
+                    
                     lastMatches[cellIdx] = match;
                     lastMatchTimes[cellIdx] = now;
                 }
@@ -1188,7 +1279,39 @@ function processVideoFrame() {
                     const g = rawBuffer[idx + 1];
                     const b = rawBuffer[idx + 2];
                     
-                    match = findBestCustomSlice(r, g, b);
+                    const idealMatch = findBestCustomSlice(r, g, b);
+                    
+                    if (idealMatch) {
+                        if (lastMatches[cellIdx]) {
+                            if (traverseLagMs > 0 && (now - lastTransitionTimes[cellIdx] < traverseLagMs)) {
+                                match = lastMatches[cellIdx];
+                            } else {
+                                if (forceLinearHorizontal || forceLinearVertical || forceLinearDiagonal) {
+                                    const prevMatch = lastMatches[cellIdx];
+                                    const nextCoords = findNextStep(
+                                        prevMatch.row, prevMatch.col,
+                                        idealMatch.row, idealMatch.col,
+                                        forceLinearHorizontal, forceLinearVertical, forceLinearDiagonal,
+                                        customImageRows, customImageCols
+                                    );
+                                    const nextIndex = nextCoords.row * customImageCols + nextCoords.col;
+                                    match = customSlices[nextIndex];
+                                } else {
+                                    match = idealMatch;
+                                }
+                                
+                                if (match.index !== lastMatches[cellIdx].index) {
+                                    lastTransitionTimes[cellIdx] = now;
+                                }
+                            }
+                        } else {
+                            match = idealMatch;
+                            lastTransitionTimes[cellIdx] = now;
+                        }
+                    } else {
+                        match = null;
+                    }
+                    
                     lastMatches[cellIdx] = match;
                     lastMatchTimes[cellIdx] = now;
                 }
@@ -1234,8 +1357,41 @@ function processVideoFrame() {
                         b: Math.round(sumB / 64)
                     };
                     
-                    // Find best matching predesigned tile index
-                    bestTileIndex = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
+                    const idealTileIndex = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
+                    
+                    if (lastMatches[cellIdx] !== null) {
+                        if (traverseLagMs > 0 && (now - lastTransitionTimes[cellIdx] < traverseLagMs)) {
+                            bestTileIndex = lastMatches[cellIdx];
+                        } else {
+                            if (forceLinearHorizontal || forceLinearVertical || forceLinearDiagonal) {
+                                const prevTileIndex = lastMatches[cellIdx];
+                                const prevRow = Math.floor(prevTileIndex / 12);
+                                const prevCol = prevTileIndex % 12;
+                                
+                                const idealRow = Math.floor(idealTileIndex / 12);
+                                const idealCol = idealTileIndex % 12;
+                                
+                                const nextCoords = findNextStep(
+                                    prevRow, prevCol,
+                                    idealRow, idealCol,
+                                    forceLinearHorizontal, forceLinearVertical, forceLinearDiagonal,
+                                    8, 12
+                                );
+                                
+                                bestTileIndex = nextCoords.row * 12 + nextCoords.col;
+                            } else {
+                                bestTileIndex = idealTileIndex;
+                            }
+                            
+                            if (bestTileIndex !== lastMatches[cellIdx]) {
+                                lastTransitionTimes[cellIdx] = now;
+                            }
+                        }
+                    } else {
+                        bestTileIndex = idealTileIndex;
+                        lastTransitionTimes[cellIdx] = now;
+                    }
+                    
                     lastMatches[cellIdx] = bestTileIndex;
                     lastMatchTimes[cellIdx] = now;
                 }
@@ -1672,6 +1828,27 @@ function bindEvents() {
     elements.flickerCooldownInput.addEventListener('input', (e) => {
         flickerCooldownMs = parseInt(e.target.value);
         elements.flickerCooldownValue.textContent = `${flickerCooldownMs}ms`;
+        resetMatchHistory();
+    });
+    
+    // Force Linear Checkboxes
+    elements.forceLinearHorizontalCheckbox.addEventListener('change', (e) => {
+        forceLinearHorizontal = e.target.checked;
+        resetMatchHistory();
+    });
+    elements.forceLinearVerticalCheckbox.addEventListener('change', (e) => {
+        forceLinearVertical = e.target.checked;
+        resetMatchHistory();
+    });
+    elements.forceLinearDiagonalCheckbox.addEventListener('change', (e) => {
+        forceLinearDiagonal = e.target.checked;
+        resetMatchHistory();
+    });
+    
+    // Traverse Lag Slider
+    elements.traverseLagInput.addEventListener('input', (e) => {
+        traverseLagMs = parseInt(e.target.value);
+        elements.traverseLagValue.textContent = `${traverseLagMs}ms`;
         resetMatchHistory();
     });
     

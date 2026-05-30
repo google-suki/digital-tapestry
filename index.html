@@ -232,6 +232,39 @@
                         </div>
                     </div>
 
+                    <!-- Force Linear Control -->
+                    <div class="control-group">
+                        <label>Force Linear</label>
+                        <div class="checkbox-group">
+                            <div class="checkbox-item">
+                                <input type="checkbox" id="force-linear-horizontal">
+                                <label for="force-linear-horizontal">Horizontal</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" id="force-linear-vertical">
+                                <label for="force-linear-vertical">Vertical</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" id="force-linear-diagonal">
+                                <label for="force-linear-diagonal">Diagonal</label>
+                            </div>
+                        </div>
+                        <p class="control-help">Constrains pixel morphing to adjacent grid frames for smooth morphing aesthetics.</p>
+                    </div>
+
+                    <!-- Traverse Lag Control -->
+                    <div class="control-group">
+                        <div class="slider-header">
+                            <label for="input-traverse-lag">Traverse Lag</label>
+                            <span id="traverse-lag-value" class="slider-badge">0ms</span>
+                        </div>
+                        <input type="range" id="input-traverse-lag" min="0" max="1000" step="50" value="0">
+                        <div class="slider-labels">
+                            <span>Instant</span>
+                            <span>Slow catch-up (1s)</span>
+                        </div>
+                    </div>
+
                     <!-- Matching Mode -->
                     <div class="control-group">
                         <label>Matching Space</label>
