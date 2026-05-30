@@ -127,14 +127,8 @@ const ROW_WEIGHTS = [
 // Precomputed metadata for the dynamic geometric tiles (84 tiles)
 let precomputedTiles = [];
 
-// Precomputed 36 color pairs with their endpoints and midpoints for pre-filtering
-let precomputedColorPairs = [];
-
-// Precomputed metadata for dual-color sprite configurations (grouped by color pair: 36 * 48)
+// Precomputed metadata for the 12x8 pre-designed sprite tiles (96 tiles)
 let precomputedSpriteTiles = [];
-
-// Precomputed rotated and mirrored grids for all 48 shapes
-let shapesWithTransformations = [];
 
 // DOM Elements Cache
 const elements = {
@@ -276,86 +270,7 @@ function hslToRgb(h, s, l) {
     };
 }
 
-/**
- * Precompute all 8 rotation and mirroring states for all 48 retro shapes
- */
-function initializeTransformations() {
-    shapesWithTransformations = RETRO_SPRITES.map(grid => {
-        const transforms = [];
-        const emptyGrid = () => Array.from({ length: 8 }, () => new Array(8).fill(0));
-        
-        // 0. Rot 0 (Original)
-        transforms.push(grid);
-        
-        // 1. Rot 90
-        const r90 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                r90[c][7 - r] = grid[r][c];
-            }
-        }
-        transforms.push(r90);
-        
-        // 2. Rot 180
-        const r180 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                r180[7 - r][7 - c] = grid[r][c];
-            }
-        }
-        transforms.push(r180);
-        
-        // 3. Rot 270
-        const r270 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                r270[7 - c][r] = grid[r][c];
-            }
-        }
-        transforms.push(r270);
-        
-        // 4. Mirror H (Horizontal Flip)
-        const mH = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                mH[r][7 - c] = grid[r][c];
-            }
-        }
-        transforms.push(mH);
-        
-        // 5. Mirror H + Rot 90
-        const mH90 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                mH90[c][7 - r] = mH[r][c];
-            }
-        }
-        transforms.push(mH90);
-        
-        // 6. Mirror H + Rot 180
-        const mH180 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                mH180[7 - r][7 - c] = mH[r][c];
-            }
-        }
-        transforms.push(mH180);
-        
-        // 7. Mirror H + Rot 270
-        const mH270 = emptyGrid();
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                mH270[7 - c][r] = mH[r][c];
-            }
-        }
-        transforms.push(mH270);
-        
-        return {
-            grid,
-            transformations: transforms
-        };
-    });
-}
+
 
 /**
  * Dynamically construct UI color pickers from defined channels
@@ -400,7 +315,7 @@ function buildColorPickers() {
  * Update combination count badges
  */
 function updateBadges() {
-    const total = tileStyle === 'geometric' ? (COLOR_PAIRS.length * 6) : (RETRO_SPRITES.length * 36);
+    const total = tileStyle === 'geometric' ? (COLOR_PAIRS.length * 6) : 96;
     document.getElementById('total-combinations-badge').textContent = total;
     document.getElementById('total-combinations-desc').textContent = total;
 }
@@ -446,71 +361,136 @@ function precomputeGeometricTiles() {
  * Precalculate aggregate RGB/LAB colors of dual-color retro shapes (48 shapes * 36 color pairs = 1728 combinations)
  * Groups candidates by color pair index for pre-filtered sub-pixel searches.
  */
-function precomputeSpriteTiles() {
-    const channels = Object.keys(currentColors);
-    const numShapes = RETRO_SPRITES.length;
-    
-    // 1. Precompute the 36 color pairs with their fg, bg, and mid LAB colors for fast filtering
-    precomputedColorPairs = [];
-    for (let i = 0; i < channels.length; i++) {
-        for (let j = 0; j < channels.length; j++) {
-            const fgChannel = channels[i];
-            const bgChannel = channels[j];
-            
-            const hexFG = currentColors[fgChannel];
-            const hexBG = currentColors[bgChannel];
-            
-            const rgbFG = hexToRgb(hexFG);
-            const rgbBG = hexToRgb(hexBG);
-            
-            const midR = Math.round((rgbFG.r + rgbBG.r) / 2);
-            const midG = Math.round((rgbFG.g + rgbBG.g) / 2);
-            const midB = Math.round((rgbFG.b + rgbBG.b) / 2);
-            
-            precomputedColorPairs.push({
-                index: i * channels.length + j,
-                fgChannel,
-                bgChannel,
-                fgColor: hexFG,
-                bgColor: hexBG,
-                fgLab: rgbToLab(rgbFG.r, rgbFG.g, rgbFG.b),
-                bgLab: rgbToLab(rgbBG.r, rgbBG.g, rgbBG.b),
-                midLab: rgbToLab(midR, midG, midB)
-            });
-        }
+// Quadrant layout specifications for the 12x8 grid of pre-designed tiles
+const QUADRANTS = [
+    // Quadrant 1 (Top-Left): White background
+    {
+        bg: 'white',
+        fgRows: ['black', 'red', 'blue', 'green'],
+        splits: [
+            { top: 'black', bottom: 'white' }, // Row 0 (relative)
+            { top: 'red', bottom: 'black' },   // Row 1
+            { top: 'blue', bottom: 'red' },     // Row 2
+            { top: 'green', bottom: 'blue' }    // Row 3
+        ]
+    },
+    // Quadrant 2 (Top-Right): Red background
+    {
+        bg: 'red',
+        fgRows: ['black', 'white', 'blue', 'green'],
+        splits: [
+            { top: 'black', bottom: 'white' },
+            { top: 'white', bottom: 'black' },
+            { top: 'blue', bottom: 'red' },
+            { top: 'green', bottom: 'blue' }
+        ]
+    },
+    // Quadrant 3 (Bottom-Left): Blue background
+    {
+        bg: 'blue',
+        fgRows: ['black', 'red', 'white', 'green'],
+        splits: [
+            { top: 'black', bottom: 'green' },
+            { top: 'red', bottom: 'black' },
+            { top: 'white', bottom: 'red' },
+            { top: 'green', bottom: 'white' }
+        ]
+    },
+    // Quadrant 4 (Bottom-Right): Green background
+    {
+        bg: 'green',
+        fgRows: ['black', 'white', 'blue', 'red'],
+        splits: [
+            { top: 'black', bottom: 'white' },
+            { top: 'white', bottom: 'black' },
+            { top: 'blue', bottom: 'red' },
+            { top: 'red', bottom: 'white' }
+        ]
     }
+];
+
+function precomputeSpriteTiles() {
+    precomputedSpriteTiles = [];
     
-    // 2. Precompute aggregate average colors for all 1728 combinations, grouped by color pair (36 arrays of 48)
-    precomputedSpriteTiles = Array.from({ length: 36 }, () => []);
-    
-    const densities = RETRO_SPRITES.map(grid => {
-        const active = grid.reduce((sum, row) => sum + row.reduce((rSum, v) => rSum + v, 0), 0);
-        return active / 64.0;
-    });
-    
-    for (let cp = 0; cp < 36; cp++) {
-        const pair = precomputedColorPairs[cp];
-        const rgbFG = hexToRgb(pair.fgColor);
-        const rgbBG = hexToRgb(pair.bgColor);
+    for (let row = 0; row < 8; row++) {
+        const qRow = Math.floor(row / 4);
+        const rRow = row % 4;
         
-        for (let s = 0; s < numShapes; s++) {
-            const density = densities[s];
-            const wFG = density;
-            const wBG = 1.0 - density;
+        for (let col = 0; col < 12; col++) {
+            const qCol = Math.floor(col / 6);
+            const rCol = col % 6;
             
-            const r = Math.round(rgbFG.r * wFG + rgbBG.r * wBG);
-            const g = Math.round(rgbFG.g * wFG + rgbBG.g * wBG);
-            const b = Math.round(rgbFG.b * wFG + rgbBG.b * wBG);
+            const qIndex = qRow * 2 + qCol;
+            const quad = QUADRANTS[qIndex];
             
-            const lab = rgbToLab(r, g, b);
+            const bgColorName = quad.bg;
+            const fgColorName = quad.fgRows[rRow];
             
-            precomputedSpriteTiles[cp].push({
-                shapeIndex: s,
-                fgColor: pair.fgColor,
-                bgColor: pair.bgColor,
-                avgRgb: { r, g, b },
-                avgLab: lab
-            });
+            const tile = {
+                index: row * 12 + col,
+                row,
+                col,
+                shapeIndex: rCol,
+                bgColorName,
+                fgColorName,
+                bgColor: currentColors[bgColorName],
+                fgColor: currentColors[fgColorName]
+            };
+            
+            // Handle specific top/bottom colors for split circle (Shape 5)
+            if (rCol === 5) {
+                const split = quad.splits[rRow];
+                tile.fgTopName = split.top;
+                tile.fgBottomName = split.bottom;
+                tile.fgColorName = null;
+                tile.fgColor = null;
+            }
+            
+            // Compile the 8x8 pixel grid of RGB colors for this tile
+            const pixelGrid = [];
+            const shapeGrid = RETRO_SHAPES[rCol];
+            const bgRgb = hexToRgb(tile.bgColor);
+            
+            let sumR = 0, sumG = 0, sumB = 0;
+            
+            for (let r = 0; r < 8; r++) {
+                const rowPixels = [];
+                for (let c = 0; c < 8; c++) {
+                    let pxColor;
+                    if (rCol === 5) {
+                        // Split circle (Shape 5)
+                        if (shapeGrid[r][c] === 1) {
+                            const colorName = r < 4 ? tile.fgTopName : tile.fgBottomName;
+                            pxColor = hexToRgb(currentColors[colorName]);
+                        } else {
+                            pxColor = bgRgb;
+                        }
+                    } else {
+                        // Standard shape
+                        if (shapeGrid[r][c] === 1) {
+                            pxColor = hexToRgb(tile.fgColor);
+                        } else {
+                            pxColor = bgRgb;
+                        }
+                    }
+                    rowPixels.push(pxColor);
+                    sumR += pxColor.r;
+                    sumG += pxColor.g;
+                    sumB += pxColor.b;
+                }
+                pixelGrid.push(rowPixels);
+            }
+            
+            tile.pixelGrid = pixelGrid;
+            
+            const avgR = Math.round(sumR / 64);
+            const avgG = Math.round(sumG / 64);
+            const avgB = Math.round(sumB / 64);
+            
+            tile.avgRgb = { r: avgR, g: avgG, b: avgB };
+            tile.avgLab = rgbToLab(avgR, avgG, avgB);
+            
+            precomputedSpriteTiles.push(tile);
         }
     }
 }
@@ -593,17 +573,19 @@ function drawTile(ctx, x, y, size, row, col) {
 }
 
 /**
- * Draw a single transformed retro sprite onto a canvas context with dual overlay colors
+ * Draw a single fixed pre-designed retro sprite tile onto a canvas context
  */
-function drawTransformedSpriteTile(ctx, x, y, size, shapeIndex, transformIndex, fgColor, bgColor) {
-    const shape = shapesWithTransformations[shapeIndex];
-    const grid = shape.transformations[transformIndex];
+function drawPredesignedSpriteTile(ctx, x, y, size, tileIndex) {
+    const tile = precomputedSpriteTiles[tileIndex];
+    if (!tile) return;
     
     const pxSize = size / 8;
+    const grid = tile.pixelGrid;
     
     for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
-            ctx.fillStyle = grid[r][c] === 1 ? fgColor : bgColor;
+            const px = grid[r][c];
+            ctx.fillStyle = `rgb(${px.r}, ${px.g}, ${px.b})`;
             ctx.fillRect(
                 x + c * pxSize, 
                 y + r * pxSize, 
@@ -642,12 +624,12 @@ function renderReferenceGrid() {
             drawTile(ctx, 0, 0, 36, tile.row, tile.col);
         });
     } else {
-        elements.referenceGridContainer.style.gridTemplateColumns = `repeat(8, 1fr)`;
+        elements.referenceGridContainer.style.gridTemplateColumns = `repeat(12, 1fr)`;
         
-        SPRITES_BY_DENSITY.forEach((sprite, i) => {
+        precomputedSpriteTiles.forEach((tile, i) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'reference-tile-wrapper';
-            wrapper.setAttribute('data-tooltip', `Glyph [${i + 1}]\nDensity: ${Math.round(sprite.density * 100)}%`);
+            wrapper.setAttribute('data-tooltip', `Tile [R:${tile.row + 1}, C:${tile.col + 1}]\n${SHAPE_NAMES[tile.shapeIndex]}`);
             
             const canvas = document.createElement('canvas');
             canvas.width = 36;
@@ -658,8 +640,7 @@ function renderReferenceGrid() {
             elements.referenceGridContainer.appendChild(wrapper);
             
             const ctx = canvas.getContext('2d');
-            // Display preview using classic yellow on dark blue
-            drawTransformedSpriteTile(ctx, 0, 0, 36, sprite.index, 0, currentColors.yellow, currentColors.blue);
+            drawPredesignedSpriteTile(ctx, 0, 0, 36, i);
         });
     }
 }
@@ -697,19 +678,22 @@ function findBestTile(r, g, b) {
 }
 
 /**
- * Highly Optimized Real-time Dual-Color Structural Glyph Matching (60-120 FPS edition)
- * 1. Pre-filters color pair segments in LAB space (evaluates only 3 closest color bands).
- * 2. Linear top-5 scan using insertion loops to avoid object allocation/sort overhead.
- * 3. Sub-pixel structural overlap checks under 8 rotations/mirrorings.
+ * Real-time Fixed Sprite Grid Matching
+ * 1. Pre-filters 96 tiles using average color distance (LAB or RGB) to select top 10 candidates.
+ * 2. Calculates exact pixel structural distance directly from raw downsampled buffer.
+ * 3. Extremely fast and allocation-free execution.
  */
 function findBestSpriteMatch(blockAvgRgb, rawBuffer, bufferWidth, startX, startY) {
+    let bestTileIndex = 0;
+    let minStructuralDistance = Infinity;
+    
     const r = blockAvgRgb.r;
     const g = blockAvgRgb.g;
     const b = blockAvgRgb.b;
     const pixelLab = rgbToLab(r, g, b);
     
-    // 1. Pre-filter: Check distance to bg, fg, and mid color for all 36 pairs to find top 3 color bands
-    const pairDists = [];
+    // 1. Pre-filter: find top 10 closest pre-designed tiles based on average color distance
+    const tileDists = [];
     
     const getDist = (l1, l2) => {
         const dL = l1.l - l2.l;
@@ -718,117 +702,65 @@ function findBestSpriteMatch(blockAvgRgb, rawBuffer, bufferWidth, startX, startY
         return dL * dL + da * da + db * db;
     };
     
-    for (let cp = 0; cp < 36; cp++) {
-        const pair = precomputedColorPairs[cp];
-        
-        const dBG = getDist(pixelLab, pair.bgLab);
-        const dFG = getDist(pixelLab, pair.fgLab);
-        const dMid = getDist(pixelLab, pair.midLab);
-        const minDist = Math.min(dBG, dFG, dMid);
-        
-        pairDists.push({ cp, dist: minDist });
-    }
-    
-    pairDists.sort((a, b) => a.dist - b.dist);
-    const topPairs = [pairDists[0].cp, pairDists[1].cp, pairDists[2].cp];
-    
-    // 2. Linear top-5 scan over the candidates of only the top 3 color bands (3 * 48 = 144 tiles)
-    const topK = [];
-    
-    for (let p = 0; p < 3; p++) {
-        const cp = topPairs[p];
-        const tiles = precomputedSpriteTiles[cp];
-        
-        for (let s = 0; s < tiles.length; s++) {
-            const tile = tiles[s];
-            let dist;
-            
-            if (matchingMethod === 'lab') {
-                const dL = pixelLab.l - tile.avgLab.l;
-                const da = pixelLab.a - tile.avgLab.a;
-                const db = pixelLab.b - tile.avgLab.b;
-                dist = dL * dL + da * da + db * db;
-            } else {
-                const dr = r - tile.avgRgb.r;
-                const dg = g - tile.avgRgb.g;
-                const db = b - tile.avgRgb.b;
-                dist = dr * dr + dg * dg + db * db;
-            }
-            
-            if (topK.length < 5) {
-                topK.push({ tile, dist });
-                if (topK.length === 5) {
-                    topK.sort((a, b) => a.dist - b.dist);
-                }
-            } else if (dist < topK[4].dist) {
-                topK[4] = { tile, dist };
-                for (let j = 4; j > 0; j--) {
-                    if (topK[j].dist < topK[j - 1].dist) {
-                        const temp = topK[j];
-                        topK[j] = topK[j - 1];
-                        topK[j - 1] = temp;
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    
-    // 3. Solve for best rotation and mirroring using structural distance check directly from rawBuffer
-    let bestTile = null;
-    let bestTransformIndex = 0;
-    let minStructuralDistance = Infinity;
-    
-    for (let c = 0; c < topK.length; c++) {
-        const candidate = topK[c].tile;
-        const shape = shapesWithTransformations[candidate.shapeIndex];
-        
-        const rgbFG = hexToRgb(candidate.fgColor);
-        const rgbBG = hexToRgb(candidate.bgColor);
-        
-        // Check all 8 transformations
-        for (let t = 0; t < 8; t++) {
-            const tGrid = shape.transformations[t];
-            let structDist = 0;
-            let pruned = false;
-            
-            for (let row = 0; row < 8; row++) {
-                const py = startY + row;
-                for (let col = 0; col < 8; col++) {
-                    const targetColor = tGrid[row][col] === 1 ? rgbFG : rgbBG;
-                    
-                    // Index directly into the flat 1D raw pixel buffer offsets
-                    const px = startX + col;
-                    const idx = (py * bufferWidth + px) * 4;
-                    
-                    const dr = targetColor.r - rawBuffer[idx];
-                    const dg = targetColor.g - rawBuffer[idx + 1];
-                    const db = targetColor.b - rawBuffer[idx + 2];
-                    
-                    structDist += dr * dr + dg * dg + db * db;
-                    
-                    // Early exit pruning: if we exceed the current best distance, stop searching this branch!
-                    if (structDist >= minStructuralDistance) {
-                        pruned = true;
-                        break;
-                    }
-                }
-                if (pruned) break;
-            }
-            
-            if (!pruned) {
-                minStructuralDistance = structDist;
-                bestTile = candidate;
-                bestTransformIndex = t;
-            }
-        }
-    }
-    
-    return {
-        tile: bestTile,
-        transformIndex: bestTransformIndex
+    const getDistRgb = (r1, g1, b1, r2, g2, b2) => {
+        const dr = r1 - r2;
+        const dg = g1 - g2;
+        const db = b1 - b2;
+        return dr * dr + dg * dg + db * db;
     };
+    
+    for (let i = 0; i < 96; i++) {
+        const tile = precomputedSpriteTiles[i];
+        let dist;
+        if (matchingMethod === 'lab') {
+            dist = getDist(pixelLab, tile.avgLab);
+        } else {
+            dist = getDistRgb(r, g, b, tile.avgRgb.r, tile.avgRgb.g, tile.avgRgb.b);
+        }
+        tileDists.push({ index: i, dist });
+    }
+    
+    tileDists.sort((a, b) => a.dist - b.dist);
+    
+    // 2. Exact pixel-by-pixel structural distance scan on the top 10 closest candidates
+    const numCandidates = Math.min(10, tileDists.length);
+    for (let c = 0; c < numCandidates; c++) {
+        const idx = tileDists[c].index;
+        const tile = precomputedSpriteTiles[idx];
+        const grid = tile.pixelGrid;
+        
+        let structDist = 0;
+        let pruned = false;
+        
+        for (let row = 0; row < 8; row++) {
+            const py = startY + row;
+            for (let col = 0; col < 8; col++) {
+                const targetColor = grid[row][col];
+                
+                const px = startX + col;
+                const pIdx = (py * bufferWidth + px) * 4;
+                
+                const dr = targetColor.r - rawBuffer[pIdx];
+                const dg = targetColor.g - rawBuffer[pIdx + 1];
+                const db = targetColor.b - rawBuffer[pIdx + 2];
+                
+                structDist += dr * dr + dg * dg + db * db;
+                
+                if (structDist >= minStructuralDistance) {
+                    pruned = true;
+                    break;
+                }
+            }
+            if (pruned) break;
+        }
+        
+        if (!pruned) {
+            minStructuralDistance = structDist;
+            bestTileIndex = idx;
+        }
+    }
+    
+    return bestTileIndex;
 }
 
 /**
@@ -1001,21 +933,9 @@ function processVideoFrame() {
                     b: Math.round(sumB / 64)
                 };
                 
-                // Find best matching {shape, fgColor, bgColor, transformation} with offset pointers
-                const match = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
-                
-                if (match.tile) {
-                    drawTransformedSpriteTile(
-                        displayCtx,
-                        x * tileSize,
-                        y * tileSize,
-                        tileSize,
-                        match.tile.shapeIndex,
-                        match.transformIndex,
-                        match.tile.fgColor,
-                        match.tile.bgColor
-                    );
-                }
+                // Find best matching predesigned tile index
+                const bestTileIndex = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
+                drawPredesignedSpriteTile(displayCtx, x * tileSize, y * tileSize, tileSize, bestTileIndex);
             }
         }
     }
@@ -1337,7 +1257,6 @@ function bindEvents() {
 // Initialize System
 window.addEventListener('DOMContentLoaded', () => {
     bindEvents();
-    initializeTransformations();
     buildColorPickers();
     updateBadges();
     precomputeTiles();
