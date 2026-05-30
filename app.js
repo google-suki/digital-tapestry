@@ -14,9 +14,24 @@ let currentCameraId = '';
 let matchingMethod = 'lab'; // 'lab' or 'rgb'
 let tileSize = 16; // Size of each mosaic block in pixels
 let blendFactor = 0; // 0.0 to 1.0 (overlay factor for original video)
+let flickerCooldownMs = 0; // Default: 0ms (no temporal cooldown stability)
+
+// Temporal matching cache to reduce high-frequency noise/flicker
+const lastMatches = new Array(200 * 150).fill(null);
+const lastMatchTimes = new Float64Array(200 * 150);
+
+function resetMatchHistory() {
+    lastMatches.fill(null);
+    lastMatchTimes.fill(0);
+}
+
 
 // Style Selection State
-let tileStyle = 'geometric'; // 'geometric' (84 concentric squares) or 'sprites' (48 custom sprites)
+let tileStyle = 'geometric'; // 'geometric' (concentric squares), 'sprites' (retro pixel glyphs), or 'custom' (uploaded image slices)
+let customImageElement = null;
+let customImageCols = 8;
+let customImageRows = 8;
+let customSlices = [];
 
 // Procedural Pattern Simulation State
 let inputSource = 'webcam'; // 'webcam' or 'procedural'
@@ -140,8 +155,13 @@ const elements = {
     tileSizeValue: document.getElementById('tile-size-value'),
     blendFactorInput: document.getElementById('input-blend-factor'),
     blendFactorValue: document.getElementById('blend-factor-value'),
-    btnPause: document.getElementById('btn-pause'),
-    btnCapture: document.getElementById('btn-capture'),
+    flickerCooldownInput: document.getElementById('input-flicker-cooldown'),
+    flickerCooldownValue: document.getElementById('flicker-cooldown-value'),
+
+    imageDropZone: document.getElementById('image-drop-zone'),
+    gridImageInput: document.getElementById('input-grid-image'),
+    gridColsInput: document.getElementById('input-grid-cols'),
+    gridRowsInput: document.getElementById('input-grid-rows'),
     referenceGridContainer: document.getElementById('reference-grid-container'),
     toggleReference: document.getElementById('toggle-reference-grid'),
     referenceGridWrapper: document.getElementById('reference-grid-wrapper'),
@@ -316,7 +336,14 @@ function buildColorPickers() {
  * Update combination count badges
  */
 function updateBadges() {
-    const total = tileStyle === 'geometric' ? (COLOR_PAIRS.length * 6) : 96;
+    let total;
+    if (tileStyle === 'geometric') {
+        total = COLOR_PAIRS.length * 6;
+    } else if (tileStyle === 'sprites') {
+        total = 96;
+    } else {
+        total = customImageCols * customImageRows;
+    }
     document.getElementById('total-combinations-badge').textContent = total;
     document.getElementById('total-combinations-desc').textContent = total;
 }
@@ -497,12 +524,107 @@ function precomputeSpriteTiles() {
 }
 
 /**
+ * Helper function to lazy-initialize and cache offscreen canvas slices when needed
+ */
+function getSliceCanvas(slice) {
+    if (!slice) return null;
+    if (slice.canvas) return slice.canvas;
+    
+    const sliceSize = customImageCols > 32 || customImageRows > 32 ? 32 : 64;
+    const sliceCanvas = document.createElement('canvas');
+    sliceCanvas.width = sliceSize;
+    sliceCanvas.height = sliceSize;
+    const sliceCtx = sliceCanvas.getContext('2d');
+    
+    sliceCtx.drawImage(
+        customImageElement,
+        slice.sx, slice.sy, slice.sw, slice.sh,
+        0, 0, sliceSize, sliceSize
+    );
+    
+    slice.canvas = sliceCanvas;
+    return sliceCanvas;
+}
+
+/**
+ * Slice the uploaded grid image into columns and rows, precalculating average colors
+ */
+function sliceGridImage() {
+    if (!customImageElement) return;
+    
+    customSlices = [];
+    
+    const imgWidth = customImageElement.naturalWidth || customImageElement.width;
+    const imgHeight = customImageElement.naturalHeight || customImageElement.height;
+    
+    const sliceWidth = imgWidth / customImageCols;
+    const sliceHeight = imgHeight / customImageRows;
+    
+    // Temporarily draw the image onto an offscreen canvas to read pixel data
+    const analysisCanvas = document.createElement('canvas');
+    analysisCanvas.width = imgWidth;
+    analysisCanvas.height = imgHeight;
+    const analysisCtx = analysisCanvas.getContext('2d');
+    analysisCtx.drawImage(customImageElement, 0, 0);
+    
+    // HIGH-PERFORMANCE: Read all image pixel bytes exactly once
+    const imgData = analysisCtx.getImageData(0, 0, imgWidth, imgHeight);
+    const data = imgData.data;
+    
+    for (let r = 0; r < customImageRows; r++) {
+        for (let c = 0; c < customImageCols; c++) {
+            const sx = Math.floor(c * sliceWidth);
+            const sy = Math.floor(r * sliceHeight);
+            const sw = Math.max(1, Math.floor(sliceWidth));
+            const sh = Math.max(1, Math.floor(sliceHeight));
+            
+            // HIGH-PERFORMANCE: Calculate average color from the single loaded buffer
+            let sumR = 0, sumG = 0, sumB = 0;
+            let count = 0;
+            
+            for (let y = sy; y < sy + sh && y < imgHeight; y++) {
+                for (let x = sx; x < sx + sw && x < imgWidth; x++) {
+                    const pixelIdx = (y * imgWidth + x) * 4;
+                    sumR += data[pixelIdx];
+                    sumG += data[pixelIdx + 1];
+                    sumB += data[pixelIdx + 2];
+                    count++;
+                }
+            }
+            
+            const avgR = count > 0 ? Math.round(sumR / count) : 0;
+            const avgG = count > 0 ? Math.round(sumG / count) : 0;
+            const avgB = count > 0 ? Math.round(sumB / count) : 0;
+            
+            customSlices.push({
+                index: r * customImageCols + c,
+                row: r,
+                col: c,
+                sx,
+                sy,
+                sw,
+                sh,
+                canvas: null, // Lazy loaded on-demand
+                avgRgb: { r: avgR, g: avgG, b: avgB },
+                avgLab: rgbToLab(avgR, avgG, avgB)
+            });
+        }
+    }
+    
+    renderReferenceGrid();
+}
+
+/**
  * Combined precompute wrapper
  */
 function precomputeTiles() {
     precomputeGeometricTiles();
     precomputeSpriteTiles();
-    renderReferenceGrid();
+    if (customImageElement) {
+        sliceGridImage();
+    } else {
+        renderReferenceGrid();
+    }
 }
 
 /**
@@ -675,7 +797,7 @@ function renderReferenceGrid() {
             const ctx = canvas.getContext('2d');
             drawTile(ctx, 0, 0, 36, tile.row, tile.col);
         });
-    } else {
+    } else if (tileStyle === 'sprites') {
         elements.referenceGridContainer.style.gridTemplateColumns = `repeat(12, 1fr)`;
         
         precomputedSpriteTiles.forEach((tile, i) => {
@@ -694,6 +816,37 @@ function renderReferenceGrid() {
             const ctx = canvas.getContext('2d');
             drawPredesignedSpriteTile(ctx, 0, 0, 36, i);
         });
+    } else if (tileStyle === 'custom') {
+        const maxDisplay = 144;
+        const displaySlices = customSlices.slice(0, maxDisplay);
+        
+        elements.referenceGridContainer.style.gridTemplateColumns = `repeat(${Math.min(customImageCols, 12)}, 1fr)`;
+        
+        displaySlices.forEach(slice => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'reference-tile-wrapper';
+            
+            const rgbStr = `rgb(${slice.avgRgb.r}, ${slice.avgRgb.g}, ${slice.avgRgb.b})`;
+            wrapper.setAttribute('data-tooltip', `Slice [R:${slice.row + 1}, C:${slice.col + 1}]\nAvg: ${rgbStr}`);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = 36;
+            canvas.height = 36;
+            canvas.className = 'reference-tile-canvas';
+            
+            wrapper.appendChild(canvas);
+            elements.referenceGridContainer.appendChild(wrapper);
+            
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(getSliceCanvas(slice), 0, 0, 36, 36);
+        });
+        
+        if (customSlices.length > maxDisplay) {
+            const note = document.createElement('div');
+            note.style.cssText = 'grid-column: 1 / -1; text-align: center; font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; font-family: var(--font-sans);';
+            note.textContent = `Showing first ${maxDisplay} of ${customSlices.length} slices (Reference grid limited for performance)`;
+            elements.referenceGridContainer.appendChild(note);
+        }
     }
 }
 
@@ -723,6 +876,40 @@ function findBestTile(r, g, b) {
         if (dist < minDistance) {
             minDistance = dist;
             bestMatch = tile;
+        }
+    }
+    
+    return bestMatch;
+}
+
+/**
+ * Find the closest custom image slice match based on LAB or RGB distance
+ */
+function findBestCustomSlice(r, g, b) {
+    if (customSlices.length === 0) return null;
+    
+    let bestMatch = null;
+    let minDistance = Infinity;
+    const pixelLab = rgbToLab(r, g, b);
+    
+    for (let i = 0; i < customSlices.length; i++) {
+        const slice = customSlices[i];
+        let dist;
+        if (matchingMethod === 'lab') {
+            const dL = pixelLab.l - slice.avgLab.l;
+            const da = pixelLab.a - slice.avgLab.a;
+            const db = pixelLab.b - slice.avgLab.b;
+            dist = dL * dL + da * da + db * db;
+        } else {
+            const dr = r - slice.avgRgb.r;
+            const dg = g - slice.avgRgb.g;
+            const db = b - slice.avgRgb.b;
+            dist = dr * dr + dg * dg + db * db;
+        }
+        
+        if (dist < minDistance) {
+            minDistance = dist;
+            bestMatch = slice;
         }
     }
     
@@ -920,9 +1107,13 @@ function processVideoFrame() {
         }
     }
     
-    if (elements.canvas.width !== vWidth || elements.canvas.height !== vHeight) {
-        elements.canvas.width = vWidth;
-        elements.canvas.height = vHeight;
+    // Enforce even dimensions to ensure perfect compatibility with hardware-accelerated WebCodecs H.264 encoders
+    const evenWidth = vWidth % 2 === 0 ? vWidth : vWidth - 1;
+    const evenHeight = vHeight % 2 === 0 ? vHeight : vHeight - 1;
+    
+    if (elements.canvas.width !== evenWidth || elements.canvas.height !== evenHeight) {
+        elements.canvas.width = evenWidth;
+        elements.canvas.height = evenHeight;
     }
     
     const gridWidth = Math.ceil(vWidth / tileSize);
@@ -931,7 +1122,7 @@ function processVideoFrame() {
     elements.resolutionDisplay.textContent = `Grid: ${gridWidth} x ${gridHeight}`;
     
     // Scale downsampling buffer based on style (8x resolution for sub-pixel matching!)
-    const factor = tileStyle === 'geometric' ? 1 : 8;
+    const factor = (tileStyle === 'geometric' || tileStyle === 'custom') ? 1 : 8;
     const bufferWidth = gridWidth * factor;
     const bufferHeight = gridHeight * factor;
     
@@ -961,43 +1152,94 @@ function processVideoFrame() {
         // Standard Geometric Rendering (Single pixel downsampling)
         for (let y = 0; y < gridHeight; y++) {
             for (let x = 0; x < gridWidth; x++) {
-                const idx = (y * gridWidth + x) * 4;
-                const r = rawBuffer[idx];
-                const g = rawBuffer[idx + 1];
-                const b = rawBuffer[idx + 2];
+                const cellIdx = y * gridWidth + x;
+                let match;
+                const now = performance.now();
                 
-                const match = findBestTile(r, g, b);
+                if (flickerCooldownMs > 0 && lastMatches[cellIdx] && (now - lastMatchTimes[cellIdx] < flickerCooldownMs)) {
+                    match = lastMatches[cellIdx];
+                } else {
+                    const idx = (y * gridWidth + x) * 4;
+                    const r = rawBuffer[idx];
+                    const g = rawBuffer[idx + 1];
+                    const b = rawBuffer[idx + 2];
+                    
+                    match = findBestTile(r, g, b);
+                    lastMatches[cellIdx] = match;
+                    lastMatchTimes[cellIdx] = now;
+                }
+                
                 drawTile(displayCtx, x * tileSize, y * tileSize, tileSize, match.row, match.col);
+            }
+        }
+    } else if (tileStyle === 'custom') {
+        // Custom Slices Rendering (Single pixel downsampling matching to custom grid image slices)
+        for (let y = 0; y < gridHeight; y++) {
+            for (let x = 0; x < gridWidth; x++) {
+                const cellIdx = y * gridWidth + x;
+                let match;
+                const now = performance.now();
+                
+                if (flickerCooldownMs > 0 && lastMatches[cellIdx] && (now - lastMatchTimes[cellIdx] < flickerCooldownMs)) {
+                    match = lastMatches[cellIdx];
+                } else {
+                    const idx = (y * gridWidth + x) * 4;
+                    const r = rawBuffer[idx];
+                    const g = rawBuffer[idx + 1];
+                    const b = rawBuffer[idx + 2];
+                    
+                    match = findBestCustomSlice(r, g, b);
+                    lastMatches[cellIdx] = match;
+                    lastMatchTimes[cellIdx] = now;
+                }
+                
+                if (match) {
+                    displayCtx.drawImage(getSliceCanvas(match), x * tileSize, y * tileSize, tileSize, tileSize);
+                } else {
+                    displayCtx.fillStyle = '#000000';
+                    displayCtx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                }
             }
         }
     } else {
         // Retro Dual-Color Structural Rendering (8x8 sub-pixel patch matching - Allocation-free!)
         for (let y = 0; y < gridHeight; y++) {
             for (let x = 0; x < gridWidth; x++) {
-                let sumR = 0, sumG = 0, sumB = 0;
-                const startX = x * 8;
-                const startY = y * 8;
+                const cellIdx = y * gridWidth + x;
+                let bestTileIndex;
+                const now = performance.now();
                 
-                for (let row = 0; row < 8; row++) {
-                    const py = startY + row;
-                    for (let col = 0; col < 8; col++) {
-                        const px = startX + col;
-                        const idx = (py * bufferWidth + px) * 4;
-                        
-                        sumR += rawBuffer[idx];
-                        sumG += rawBuffer[idx + 1];
-                        sumB += rawBuffer[idx + 2];
+                if (flickerCooldownMs > 0 && lastMatches[cellIdx] !== null && (now - lastMatchTimes[cellIdx] < flickerCooldownMs)) {
+                    bestTileIndex = lastMatches[cellIdx];
+                } else {
+                    let sumR = 0, sumG = 0, sumB = 0;
+                    const startX = x * 8;
+                    const startY = y * 8;
+                    
+                    for (let row = 0; row < 8; row++) {
+                        const py = startY + row;
+                        for (let col = 0; col < 8; col++) {
+                            const px = startX + col;
+                            const idx = (py * bufferWidth + px) * 4;
+                            
+                            sumR += rawBuffer[idx];
+                            sumG += rawBuffer[idx + 1];
+                            sumB += rawBuffer[idx + 2];
+                        }
                     }
+                    
+                    const blockAvg = {
+                        r: Math.round(sumR / 64),
+                        g: Math.round(sumG / 64),
+                        b: Math.round(sumB / 64)
+                    };
+                    
+                    // Find best matching predesigned tile index
+                    bestTileIndex = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
+                    lastMatches[cellIdx] = bestTileIndex;
+                    lastMatchTimes[cellIdx] = now;
                 }
                 
-                const blockAvg = {
-                    r: Math.round(sumR / 64),
-                    g: Math.round(sumG / 64),
-                    b: Math.round(sumB / 64)
-                };
-                
-                // Find best matching predesigned tile index
-                const bestTileIndex = findBestSpriteMatch(blockAvg, rawBuffer, bufferWidth, startX, startY);
                 drawPredesignedSpriteTile(displayCtx, x * tileSize, y * tileSize, tileSize, bestTileIndex);
             }
         }
@@ -1019,6 +1261,7 @@ function processVideoFrame() {
         }
         displayCtx.restore();
     }
+
     
     const now = performance.now();
     frameCount++;
@@ -1061,8 +1304,6 @@ async function initWebcam(deviceId = '') {
         elements.video.onloadedmetadata = () => {
             elements.video.play().then(() => {
                 isPaused = false;
-                elements.btnPause.querySelector('span').textContent = 'Freeze';
-                elements.btnPause.classList.remove('active-pause');
                 
                 if (animationFrameId) cancelAnimationFrame(animationFrameId);
                 animationFrameId = requestAnimationFrame(processVideoFrame);
@@ -1095,8 +1336,6 @@ function switchToProceduralSource() {
     }
     
     isPaused = false;
-    elements.btnPause.querySelector('span').textContent = 'Freeze';
-    elements.btnPause.classList.remove('active-pause');
     
     lastFrameTime = performance.now();
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
@@ -1178,9 +1417,10 @@ function showToast(message) {
     elements.toast.className = 'toast-visible';
     
     setTimeout(() => {
-        elements.toast.className = 'toast-hidden';
+                elements.toast.className = 'toast-hidden';
     }, 2500);
 }
+
 
 /**
  * Bind all user interactions and input controls
@@ -1190,6 +1430,7 @@ function bindEvents() {
     document.querySelectorAll('input[name="input-source"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             inputSource = e.target.value;
+            resetMatchHistory();
             
             // Hide all settings groups
             document.getElementById('webcam-settings-group').style.display = 'none';
@@ -1209,8 +1450,6 @@ function bindEvents() {
                 if (elements.uploadedVideo.src) {
                     elements.uploadedVideo.play().then(() => {
                         isPaused = false;
-                        elements.btnPause.querySelector('span').textContent = 'Freeze';
-                        elements.btnPause.classList.remove('active-pause');
                         if (animationFrameId) cancelAnimationFrame(animationFrameId);
                         animationFrameId = requestAnimationFrame(processVideoFrame);
                     }).catch(err => console.error("Error playing video:", err));
@@ -1274,12 +1513,8 @@ function bindEvents() {
         elements.uploadedVideo.onloadedmetadata = () => {
             elements.uploadedVideo.play().then(() => {
                 isPaused = false;
-                elements.btnPause.querySelector('span').textContent = 'Freeze';
-                elements.btnPause.classList.remove('active-pause');
-                
                 if (animationFrameId) cancelAnimationFrame(animationFrameId);
                 animationFrameId = requestAnimationFrame(processVideoFrame);
-                
                 showToast(`Video loaded successfully!`);
             }).catch(err => {
                 console.error('Failed to auto-play loaded video:', err);
@@ -1288,14 +1523,105 @@ function bindEvents() {
         };
     }
 
-    // Tile set style segmented switcher (geometric vs retro sprites)
+    // Tile set style segmented switcher (geometric vs retro sprites vs custom)
     document.querySelectorAll('input[name="tile-style"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             tileStyle = e.target.value;
+            resetMatchHistory();
+            
+            const customGroup = document.getElementById('custom-image-settings-group');
+            if (tileStyle === 'custom') {
+                customGroup.style.display = 'block';
+                if (!customImageElement) {
+                    showToast("Please upload a custom grid image!");
+                }
+            } else {
+                customGroup.style.display = 'none';
+            }
+            
             updateBadges();
             renderReferenceGrid();
         });
     });
+
+    // Custom Image Upload drop zone and file-picker event listeners
+    const imageDropZone = elements.imageDropZone;
+    const gridImageInput = elements.gridImageInput;
+    
+    imageDropZone.addEventListener('click', () => {
+        gridImageInput.click();
+    });
+    
+    gridImageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            loadGridImage(file);
+        }
+    });
+    
+    imageDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        imageDropZone.style.borderColor = 'var(--accent-blue)';
+        imageDropZone.style.background = 'rgba(59, 130, 246, 0.05)';
+    });
+    
+    imageDropZone.addEventListener('dragleave', () => {
+        imageDropZone.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        imageDropZone.style.background = 'rgba(9, 10, 15, 0.4)';
+    });
+    
+    imageDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        imageDropZone.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        imageDropZone.style.background = 'rgba(9, 10, 15, 0.4)';
+        
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) {
+            loadGridImage(file);
+        } else {
+            showToast('Please drop a valid image file!');
+        }
+    });
+    
+    function loadGridImage(file) {
+        const img = new Image();
+        img.onload = function() {
+            customImageElement = img;
+            document.getElementById('lbl-image-name').textContent = file.name;
+            document.getElementById('grid-image-info').style.display = 'block';
+            document.getElementById('lbl-image-upload').textContent = 'Change image file';
+            sliceGridImage();
+            showToast('Grid image loaded and sliced successfully!');
+        };
+        img.src = URL.createObjectURL(file);
+    }
+
+    // Cols & Rows Inputs interaction with [1, 120] limits clamping
+    const handleDimensionChange = () => {
+        let cols = parseInt(elements.gridColsInput.value) || 8;
+        let rows = parseInt(elements.gridRowsInput.value) || 8;
+        
+        // Clamp to [1, 120] range
+        if (cols < 1) cols = 1;
+        if (cols > 120) cols = 120;
+        if (rows < 1) rows = 1;
+        if (rows > 120) rows = 120;
+        
+        elements.gridColsInput.value = cols;
+        elements.gridRowsInput.value = rows;
+        
+        customImageCols = cols;
+        customImageRows = rows;
+        
+        updateBadges();
+        
+        if (customImageElement) {
+            sliceGridImage();
+        }
+    };
+    
+    elements.gridColsInput.addEventListener('change', handleDimensionChange);
+    elements.gridRowsInput.addEventListener('change', handleDimensionChange);
 
     // Procedural controllers
     document.getElementById('select-pattern').addEventListener('change', (e) => {
@@ -1332,6 +1658,7 @@ function bindEvents() {
     elements.tileSizeInput.addEventListener('input', (e) => {
         tileSize = parseInt(e.target.value);
         elements.tileSizeValue.textContent = `${tileSize}px`;
+        resetMatchHistory();
     });
     
     // Blend factor slider
@@ -1339,6 +1666,13 @@ function bindEvents() {
         const pct = parseInt(e.target.value);
         blendFactor = pct / 100;
         elements.blendFactorValue.textContent = `${pct}%`;
+    });
+
+    // Flicker control slider
+    elements.flickerCooldownInput.addEventListener('input', (e) => {
+        flickerCooldownMs = parseInt(e.target.value);
+        elements.flickerCooldownValue.textContent = `${flickerCooldownMs}ms`;
+        resetMatchHistory();
     });
     
     // Segmented match spaces
@@ -1354,52 +1688,12 @@ function bindEvents() {
         if (id) {
             currentCameraId = id;
             initWebcam(id);
+            resetMatchHistory();
         }
     });
     
-    // Pause / Play toggling
-    elements.btnPause.addEventListener('click', () => {
-        isPaused = !isPaused;
-        if (isPaused) {
-            elements.btnPause.querySelector('span').textContent = 'Resume';
-            elements.btnPause.classList.add('active-pause');
-            if (animationFrameId) cancelAnimationFrame(animationFrameId);
-            
-            if (inputSource === 'video') {
-                elements.uploadedVideo.pause();
-            }
-            
-            displayCtx.save();
-            displayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            displayCtx.fillRect(0, 0, elements.canvas.width, elements.canvas.height);
-            displayCtx.restore();
-            
-            elements.fpsDisplay.innerHTML = `<span class="dot" style="background-color: var(--text-muted)"></span> Frozen`;
-        } else {
-            elements.btnPause.querySelector('span').textContent = 'Freeze';
-            elements.btnPause.classList.remove('active-pause');
-            
-            if (inputSource === 'video' && elements.uploadedVideo.src) {
-                elements.uploadedVideo.play().catch(err => console.error(err));
-            }
-            
-            lastFrameTime = performance.now();
-            animationFrameId = requestAnimationFrame(processVideoFrame);
-        }
-    });
-    
-    // Export snapshots
-    elements.btnCapture.addEventListener('click', () => {
-        const dateStr = new Date().toISOString().substring(0, 19).replace(/[:T]/g, '-');
-        const dataUrl = elements.canvas.toDataURL('image/png');
-        
-        const link = document.createElement('a');
-        link.download = `chromamosaic-${dateStr}.png`;
-        link.href = dataUrl;
-        link.click();
-        
-        showToast('Snapshot exported successfully!');
-    });
+
+
     
     // Preset button clicks
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -1409,6 +1703,7 @@ function bindEvents() {
             
             const presetName = e.target.dataset.preset;
             applyPresetTheme(presetName);
+            resetMatchHistory();
         });
     });
     

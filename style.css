@@ -301,10 +301,6 @@ body {
     transform: translateY(-1px);
 }
 
-.action-btn.active-pause {
-    background: var(--color-r) !important;
-    box-shadow: 0 4px 15px rgba(235, 20, 20, 0.35);
-}
 
 .icon {
     width: 18px;
@@ -755,6 +751,17 @@ input[type="range"]::-webkit-slider-thumb:hover {
     color: var(--text-secondary);
     font-weight: 500;
 }
+
+input[type="number"] {
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent-blue) !important;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
 
 /* Responsive Adjustments */
 @media (max-width: 1024px) {
