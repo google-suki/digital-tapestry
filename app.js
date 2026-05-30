@@ -573,26 +573,77 @@ function drawTile(ctx, x, y, size, row, col) {
 }
 
 /**
- * Draw a single fixed pre-designed retro sprite tile onto a canvas context
+ * Draw a single fixed pre-designed sprite tile onto a canvas context at full resolution (smooth vector drawing)
  */
 function drawPredesignedSpriteTile(ctx, x, y, size, tileIndex) {
     const tile = precomputedSpriteTiles[tileIndex];
     if (!tile) return;
     
-    const pxSize = size / 8;
-    const grid = tile.pixelGrid;
+    // 1. Draw Background
+    ctx.fillStyle = tile.bgColor;
+    ctx.fillRect(x, y, size, size);
     
-    for (let r = 0; r < 8; r++) {
-        for (let c = 0; c < 8; c++) {
-            const px = grid[r][c];
-            ctx.fillStyle = `rgb(${px.r}, ${px.g}, ${px.b})`;
-            ctx.fillRect(
-                x + c * pxSize, 
-                y + r * pxSize, 
-                pxSize - 0.5, 
-                pxSize - 0.5
-            );
-        }
+    // 2. Draw Shape
+    const cx = x + size / 2;
+    const cy = y + size / 2;
+    
+    if (tile.shapeIndex === 0) {
+        // Circle (diameter 75% of tile size)
+        const r = size * 0.375;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+        ctx.fillStyle = tile.fgColor;
+        ctx.fill();
+    } else if (tile.shapeIndex === 1) {
+        // Square (width 75% of tile size)
+        const w = size * 0.75;
+        const offset = (size - w) / 2;
+        ctx.fillStyle = tile.fgColor;
+        ctx.fillRect(x + offset, y + offset, w, w);
+    } else if (tile.shapeIndex === 2) {
+        // Cross (thickness 25% of tile size, touching borders)
+        const thickness = size * 0.25;
+        const offset = (size - thickness) / 2;
+        ctx.fillStyle = tile.fgColor;
+        // Vertical bar
+        ctx.fillRect(x + offset, y, thickness, size);
+        // Horizontal bar
+        ctx.fillRect(x, y + offset, size, thickness);
+    } else if (tile.shapeIndex === 3) {
+        // Horizontal Stripes (4 alternating lines, touching borders)
+        const h = size / 8;
+        ctx.fillStyle = tile.fgColor;
+        ctx.fillRect(x, y, size, h);
+        ctx.fillRect(x, y + 2 * h, size, h);
+        ctx.fillRect(x, y + 4 * h, size, h);
+        ctx.fillRect(x, y + 6 * h, size, h);
+    } else if (tile.shapeIndex === 4) {
+        // Triangle pointing up (75% size with matching margins)
+        const margin = size * 0.125;
+        ctx.fillStyle = tile.fgColor;
+        ctx.beginPath();
+        ctx.moveTo(cx, y + margin);
+        ctx.lineTo(x + size - margin, y + size - margin);
+        ctx.lineTo(x + margin, y + size - margin);
+        ctx.closePath();
+        ctx.fill();
+    } else if (tile.shapeIndex === 5) {
+        // Split Circle (split horizontally)
+        const r = size * 0.375;
+        const fgTop = currentColors[tile.fgTopName];
+        const fgBottom = currentColors[tile.fgBottomName];
+        
+        // Top Semicircle
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, Math.PI, 0, false);
+        ctx.fillStyle = fgTop;
+        ctx.fill();
+        
+        // Bottom Semicircle
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI, false);
+        ctx.fillStyle = fgBottom;
+        ctx.fill();
     }
 }
 
