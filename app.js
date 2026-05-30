@@ -133,6 +133,7 @@ let precomputedSpriteTiles = [];
 // DOM Elements Cache
 const elements = {
     video: document.getElementById('webcam-video'),
+    uploadedVideo: document.getElementById('uploaded-video'),
     canvas: document.getElementById('mosaic-canvas'),
     cameraSelect: document.getElementById('select-camera'),
     tileSizeInput: document.getElementById('input-tile-size'),
@@ -910,6 +911,13 @@ function processVideoFrame() {
             animationFrameId = requestAnimationFrame(processVideoFrame);
             return;
         }
+    } else if (inputSource === 'video') {
+        vWidth = elements.uploadedVideo.videoWidth;
+        vHeight = elements.uploadedVideo.videoHeight;
+        if (vWidth === 0 || vHeight === 0 || elements.uploadedVideo.paused) {
+            animationFrameId = requestAnimationFrame(processVideoFrame);
+            return;
+        }
     }
     
     if (elements.canvas.width !== vWidth || elements.canvas.height !== vHeight) {
@@ -932,6 +940,8 @@ function processVideoFrame() {
     
     if (inputSource === 'webcam') {
         offscreenCtx.drawImage(elements.video, 0, 0, bufferWidth, bufferHeight);
+    } else if (inputSource === 'video') {
+        offscreenCtx.drawImage(elements.uploadedVideo, 0, 0, bufferWidth, bufferHeight);
     } else {
         generateProceduralFrame(bufferWidth, bufferHeight);
     }
@@ -942,8 +952,10 @@ function processVideoFrame() {
     displayCtx.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
     
     displayCtx.save();
-    displayCtx.translate(elements.canvas.width, 0);
-    displayCtx.scale(-1, 1);
+    if (inputSource === 'webcam') {
+        displayCtx.translate(elements.canvas.width, 0);
+        displayCtx.scale(-1, 1);
+    }
     
     if (tileStyle === 'geometric') {
         // Standard Geometric Rendering (Single pixel downsampling)
@@ -996,10 +1008,12 @@ function processVideoFrame() {
     if (blendFactor > 0) {
         displayCtx.save();
         displayCtx.globalAlpha = blendFactor;
-        displayCtx.translate(elements.canvas.width, 0);
-        displayCtx.scale(-1, 1);
         if (inputSource === 'webcam') {
+            displayCtx.translate(elements.canvas.width, 0);
+            displayCtx.scale(-1, 1);
             displayCtx.drawImage(elements.video, 0, 0, elements.canvas.width, elements.canvas.height);
+        } else if (inputSource === 'video') {
+            displayCtx.drawImage(elements.uploadedVideo, 0, 0, elements.canvas.width, elements.canvas.height);
         } else {
             displayCtx.drawImage(offscreenCanvas, 0, 0, elements.canvas.width, elements.canvas.height);
         }
@@ -1070,7 +1084,10 @@ function switchToProceduralSource() {
     document.getElementById('source-procedural').checked = true;
     inputSource = 'procedural';
     document.getElementById('webcam-settings-group').style.display = 'none';
+    document.getElementById('video-settings-group').style.display = 'none';
     document.getElementById('procedural-settings-group').style.display = 'block';
+    
+    elements.uploadedVideo.pause();
     
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -1173,15 +1190,103 @@ function bindEvents() {
     document.querySelectorAll('input[name="input-source"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             inputSource = e.target.value;
+            
+            // Hide all settings groups
+            document.getElementById('webcam-settings-group').style.display = 'none';
+            document.getElementById('video-settings-group').style.display = 'none';
+            document.getElementById('procedural-settings-group').style.display = 'none';
+            
             if (inputSource === 'webcam') {
                 document.getElementById('webcam-settings-group').style.display = 'block';
-                document.getElementById('procedural-settings-group').style.display = 'none';
+                elements.uploadedVideo.pause();
                 initWebcam(currentCameraId);
-            } else {
+            } else if (inputSource === 'video') {
+                document.getElementById('video-settings-group').style.display = 'block';
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+                if (elements.uploadedVideo.src) {
+                    elements.uploadedVideo.play().then(() => {
+                        isPaused = false;
+                        elements.btnPause.querySelector('span').textContent = 'Freeze';
+                        elements.btnPause.classList.remove('active-pause');
+                        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                        animationFrameId = requestAnimationFrame(processVideoFrame);
+                    }).catch(err => console.error("Error playing video:", err));
+                } else {
+                    showToast("Please select an MP4 video file to begin!");
+                }
+            } else if (inputSource === 'procedural') {
+                document.getElementById('procedural-settings-group').style.display = 'block';
+                elements.uploadedVideo.pause();
                 switchToProceduralSource();
             }
         });
     });
+
+    // Video upload drag-and-drop and file-picker event listeners
+    const dropZone = document.getElementById('video-drop-zone');
+    const fileInput = document.getElementById('input-video-file');
+    
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            loadVideoFile(file);
+        }
+    });
+    
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--accent-blue)';
+        dropZone.style.background = 'rgba(59, 130, 246, 0.05)';
+    });
+    
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        dropZone.style.background = 'rgba(9, 10, 15, 0.4)';
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        dropZone.style.background = 'rgba(9, 10, 15, 0.4)';
+        
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('video/')) {
+            loadVideoFile(file);
+        } else {
+            showToast('Please drop a valid MP4 video file!');
+        }
+    });
+    
+    function loadVideoFile(file) {
+        const url = URL.createObjectURL(file);
+        elements.uploadedVideo.src = url;
+        
+        document.getElementById('lbl-video-name').textContent = file.name;
+        document.getElementById('video-playback-info').style.display = 'block';
+        
+        elements.uploadedVideo.onloadedmetadata = () => {
+            elements.uploadedVideo.play().then(() => {
+                isPaused = false;
+                elements.btnPause.querySelector('span').textContent = 'Freeze';
+                elements.btnPause.classList.remove('active-pause');
+                
+                if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                animationFrameId = requestAnimationFrame(processVideoFrame);
+                
+                showToast(`Video loaded successfully!`);
+            }).catch(err => {
+                console.error('Failed to auto-play loaded video:', err);
+                showToast('Failed to play video file.');
+            });
+        };
+    }
 
     // Tile set style segmented switcher (geometric vs retro sprites)
     document.querySelectorAll('input[name="tile-style"]').forEach(radio => {
@@ -1260,6 +1365,10 @@ function bindEvents() {
             elements.btnPause.classList.add('active-pause');
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
             
+            if (inputSource === 'video') {
+                elements.uploadedVideo.pause();
+            }
+            
             displayCtx.save();
             displayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             displayCtx.fillRect(0, 0, elements.canvas.width, elements.canvas.height);
@@ -1269,6 +1378,11 @@ function bindEvents() {
         } else {
             elements.btnPause.querySelector('span').textContent = 'Freeze';
             elements.btnPause.classList.remove('active-pause');
+            
+            if (inputSource === 'video' && elements.uploadedVideo.src) {
+                elements.uploadedVideo.play().catch(err => console.error(err));
+            }
+            
             lastFrameTime = performance.now();
             animationFrameId = requestAnimationFrame(processVideoFrame);
         }
