@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChromaMosaic - Live camera rendered with geometric color grids</title>
+    <meta name="description" content="Render your webcam feed in real-time using a mosaic of 36 unique, two-color geometric grid squares. Customizable colors, resolutions, and matching algorithms.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Background glows -->
+        <div class="bg-glow glow-1"></div>
+        <div class="bg-glow glow-2"></div>
+        
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-container">
+                <div class="logo-icon">
+                    <div class="logo-square b-color"></div>
+                    <div class="logo-square g-color"></div>
+                    <div class="logo-square y-color"></div>
+                    <div class="logo-square r-color"></div>
+                </div>
+                <h1>Chroma<span>Mosaic</span></h1>
+            </div>
+            <p class="subtitle">A live optical mosaic camera using <span id="total-combinations-badge">36</span> unique dual-color squares</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-layout">
+            <!-- Viewport Section -->
+            <section class="viewport-section">
+                <div class="viewport-wrapper">
+                    <!-- Real-time Canvas -->
+                    <canvas id="mosaic-canvas" width="640" height="480"></canvas>
+                    
+                    <!-- Original Video Element (Hidden or overlaid) -->
+                    <video id="webcam-video" autoplay playsinline muted></video>
+                    
+                    <!-- Video overlay for comparison -->
+                    <div id="video-overlay" class="overlay-hidden"></div>
+                    
+                    <!-- Status / Info Bar overlay -->
+                    <div class="viewport-stats">
+                        <span id="fps-display"><span class="dot green"></span> Live: 30 FPS</span>
+                        <span id="resolution-display">Grid: 64 x 48</span>
+                    </div>
+
+                    <!-- Viewport Actions -->
+                    <div class="viewport-actions">
+                        <button id="btn-pause" class="action-btn" title="Pause/Freeze Stream">
+                            <svg class="icon" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            <span>Freeze</span>
+                        </button>
+                        <button id="btn-capture" class="action-btn primary-glow" title="Capture Snapshot">
+                            <svg class="icon" viewBox="0 0 24 24"><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+                            <span>Export</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Sidebar Controls -->
+            <aside class="controls-sidebar">
+                <!-- Control Panel -->
+                <div class="control-card">
+                    <h2 class="section-title">
+                        <svg class="section-icon" viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.04,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+                        Configuration
+                    </h2>
+                    
+                    <!-- Input Source Selector -->
+                    <div class="control-group">
+                        <label>Input Source</label>
+                        <div class="segmented-control">
+                            <input type="radio" id="source-webcam" name="input-source" value="webcam" checked>
+                            <label for="source-webcam">Webcam Feed</label>
+                            
+                            <input type="radio" id="source-procedural" name="input-source" value="procedural">
+                            <label for="source-procedural">Procedural Art</label>
+                        </div>
+                    </div>
+
+                    <!-- Tile Style Selector -->
+                    <div class="control-group">
+                        <label>Tile Set Style</label>
+                        <div class="segmented-control">
+                            <input type="radio" id="style-geometric" name="tile-style" value="geometric" checked>
+                            <label for="style-geometric">Concentric Squares</label>
+                            
+                            <input type="radio" id="style-sprites" name="tile-style" value="sprites">
+                            <label for="style-sprites">Retro Pixel Glyphs</label>
+                        </div>
+                    </div>
+
+                    <!-- Webcam Settings Group -->
+                    <div id="webcam-settings-group">
+                        <div class="control-group">
+                            <label for="select-camera">Active Camera</label>
+                            <div class="custom-select-wrapper">
+                                <select id="select-camera">
+                                    <option value="">Loading cameras...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Procedural Settings Group -->
+                    <div id="procedural-settings-group" style="display: none;">
+                        <!-- Pattern Type -->
+                        <div class="control-group">
+                            <label for="select-pattern">Generative Pattern</label>
+                            <div class="custom-select-wrapper">
+                                <select id="select-pattern">
+                                    <option value="plasma">Plasma Waveflow</option>
+                                    <option value="spiral">Vortex Spiral</option>
+                                    <option value="ripple">Dynamic Ripples</option>
+                                    <option value="mandala">Pulsing Mandala</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- Speed Slider -->
+                        <div class="control-group">
+                            <div class="slider-header">
+                                <label for="input-pattern-speed">Animation Speed</label>
+                                <span id="pattern-speed-value" class="slider-badge">1.0x</span>
+                            </div>
+                            <input type="range" id="input-pattern-speed" min="0" max="3" step="0.1" value="1.0">
+                        </div>
+                        
+                        <!-- Scale Slider -->
+                        <div class="control-group">
+                            <div class="slider-header">
+                                <label for="input-pattern-scale">Pattern Scale</label>
+                                <span id="pattern-scale-value" class="slider-badge">1.0x</span>
+                            </div>
+                            <input type="range" id="input-pattern-scale" min="0.2" max="3" step="0.1" value="1.0">
+                        </div>
+
+                        <!-- Color Mode Selector -->
+                        <div class="control-group">
+                            <label for="select-pattern-color">Color Scheme</label>
+                            <div class="custom-select-wrapper">
+                                <select id="select-pattern-color">
+                                    <option value="custom">Dynamic Palette</option>
+                                    <option value="rainbow">Vibrant Rainbow</option>
+                                    <option value="fire">Thermal Flame</option>
+                                    <option value="ocean">Deep Ocean Blue</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Resolution Slider -->
+                    <div class="control-group">
+                        <div class="slider-header">
+                            <label for="input-tile-size">Tile Resolution</label>
+                            <span id="tile-size-value" class="slider-badge">16px</span>
+                        </div>
+                        <input type="range" id="input-tile-size" min="8" max="40" step="2" value="16">
+                        <div class="slider-labels">
+                            <span>Fine Detail (8px)</span>
+                            <span>Abstract (40px)</span>
+                        </div>
+                    </div>
+
+                    <!-- Blend Factor Slider -->
+                    <div class="control-group">
+                        <div class="slider-header">
+                            <label for="input-blend-factor">Color Bleed</label>
+                            <span id="blend-factor-value" class="slider-badge">0%</span>
+                        </div>
+                        <input type="range" id="input-blend-factor" min="0" max="100" step="5" value="0">
+                        <div class="slider-labels">
+                            <span>Pure Blocks</span>
+                            <span>Blend Original</span>
+                        </div>
+                    </div>
+
+                    <!-- Matching Mode -->
+                    <div class="control-group">
+                        <label>Matching Space</label>
+                        <div class="segmented-control">
+                            <input type="radio" id="match-lab" name="match-method" value="lab" checked>
+                            <label for="match-lab">Perceptual (LAB)</label>
+                            
+                            <input type="radio" id="match-rgb" name="match-method" value="rgb">
+                            <label for="match-rgb">Standard (RGB)</label>
+                        </div>
+                        <p class="control-help">LAB space adjusts for human brightness perception, delivering vastly superior color matching.</p>
+                    </div>
+                </div>
+
+                <!-- Color System Panel -->
+                <div class="control-card">
+                    <h2 class="section-title">
+                        <svg class="section-icon" viewBox="0 0 24 24"><path d="M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9c0.83,0,1.5-0.67,1.5-1.5c0-0.39-0.15-0.74-0.39-1.01c-0.23-0.26-0.38-0.61-0.38-0.99 c0-0.83,0.67-1.5,1.5-1.5H16c2.76,0,5-2.24,5-5C21,7.03,16.97,3,12,3z M6.5,12c-0.83,0-1.5-0.67-1.5-1.5S5.67,9,6.5,9S8,9.67,8,10.5 S7.33,12,6.5,12z M9.5,8C8.67,8,8,7.33,8,6.5S8.67,5,9.5,5S11,5.67,11,6.5S10.33,8,9.5,8z M14.5,8c-0.83,0-1.5-0.67-1.5-1.5 S13.67,5,14.5,5s1.5,0.67,1.5,1.5S15.33,8,14.5,8z M17.5,12c-0.83,0-1.5-0.67-1.5-1.5s0.67-1.5,1.5-1.5s1.5,0.67,1.5,1.5 S18.33,12,17.5,12z"/></svg>
+                        Dynamic Color System
+                    </h2>
+                    
+                    <!-- Palette Presets -->
+                    <div class="control-group">
+                        <label>Preset Themes</label>
+                        <div class="palette-presets">
+                            <button class="preset-btn active" data-preset="original" title="Original Colors">Original</button>
+                            <button class="preset-btn" data-preset="cyberpunk" title="Cyberpunk Neon">Neon</button>
+                            <button class="preset-btn" data-preset="forest" title="Earthy Forest">Forest</button>
+                            <button class="preset-btn" data-preset="sunset" title="Sunset Glow">Sunset</button>
+                            <button class="preset-btn" data-preset="monochrome" title="Noir Monochrome">Monochrome</button>
+                        </div>
+                    </div>
+
+                    <!-- Custom Color Pickers -->
+                    <div class="control-group">
+                        <label>Custom Channel Tuning</label>
+                        <div class="color-pickers-grid" id="color-pickers-container">
+                            <!-- Dynamic input pickers generated by app.js -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Reference Grid Panel -->
+                <div class="control-card">
+                    <div class="accordion-header" id="toggle-reference-grid">
+                        <h2 class="section-title">
+                            <svg class="section-icon" viewBox="0 0 24 24"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
+                            Reference Mosaic Grid
+                        </h2>
+                        <span class="accordion-icon"></span>
+                    </div>
+                    <div class="accordion-content" id="reference-grid-wrapper">
+                        <p class="reference-desc">The <span id="total-combinations-desc">36</span> unique combinations generated dynamically from your palette:</p>
+                        <div class="reference-grid" id="reference-grid-container">
+                            <!-- Dynamically populated preview of current tiles -->
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Toast Notification -->
+        <div id="toast-notification" class="toast-hidden">Snapshot saved to exports!</div>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Designed & Built with Antigravity • High-Fidelity Digital Mosaic Camera</p>
+        </footer>
+    </div>
+    
+    <script src="sprites.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
